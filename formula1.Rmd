@@ -1,0 +1,409 @@
+---
+title: "Statisitcal Computing - Midterm 1"
+output: rmarkdown::html_document
+author: Martin Olarte
+---
+
+Due Monday, February 21st by 5:00 pm.
+
+Before you start be sure to read through *all* of the rules and instructions in the `README.md`.
+
+<br/>
+
+### Data & Setup
+
+```{r message=FALSE}
+library(tidyverse)
+library(kableExtra)
+library(janitor)
+library(gganimate)
+library(transformr)
+library(gghighlight)
+library(ggrepel)
+library(gridExtra)
+f1 = readRDS(file="data/f1.rds")
+```
+
+
+<br/>
+
+### Task 1 - Tidy the data
+
+#### Write up
+
+The first step in tidying the data with the appropriate specified columns was to take a look at the structure or schema of the JSON file to determine what data was relevant. Within the first list (MRData), I would only be using the data from the RaceTable sub-list, which only contains a "season" column and the sub-sub list "Races". Since "season" was irrelevant since the analysis is focused on the 2021 season alone, I decided to only use the sub-sub list "Races" (race_info). Next, I had to convert the nested lists into a data frame to make use of the dplyr rectangling methods. After unnesting the first list which holds the relevant information, I dropped the irrelevant columns using the select() method. I then renamed the raceName column to fit the specified name "race_name" and proceeded to unnest the Results sub-list to create a necessary column to use the hoist() method to extract the position and points columns, as well as the two sub-lists Driver and Constructor. Then, from these sub-lists, I used the hoist() method again to extract the drivers' first and last names, and the constructor or team names. After having all the data in the data frame, I used the mutate() function to ensure the appropriate data types for each column and create the driver column by concatenating the given and family names of drivers using the paste() method. To ensure the data type of the columns is consistent with the requirements, I used the appropriate "as.type" methods for each column that was not already consistent. To avoid any NAs being introduced by coercion, since the problem asks for an NA if a driver did not finish the race for any reason, I read the metadata which states that "The value of the positionText attribute is either an integer (finishing position), 'R' (retired), 'D' (disqualified), 'E' (excluded), 'W' (withdrawn), 'F' (failed to qualify) or 'N' (not classified)". Thus I encoded the possibilities for a non-integer position and replaced all instances with NAs as a safeguard in the position_nas column, and then modified the position column to transform the remaining integer values using the as.integer() method. Finally I selected the relevant columns in the appropriate order, made the data frame into a tibble (for easier readability and so it shows the column types), and finally printed the first 10 rows using the head() function. 
+
+##### References
+
+https://stackoverflow.com/questions/2288485/how-to-convert-a-data-frame-column-to-numeric-type
+
+https://tidyr.tidyverse.org/articles/rectangle.html
+
+https://ergast.com/mrd/methods/results/
+
+#### Code
+
+```{r task1}
+#Save relevant data
+race_info <- f1$MRData$RaceTable$Races
+
+#Tidying data
+f1_df <- tibble(race_info) %>%
+  unnest_wider(race_info) %>%
+  select(-season, -url, -Circuit, -time) %>%
+  unnest_longer(Results) %>%
+  hoist(.col = Results,
+        position = "positionText",
+        points = "points",
+        Driver = "Driver",
+        Constructor = "Constructor"
+  ) %>%
+  hoist(.col = Driver,
+        first = "givenName",
+        last = "familyName") %>%
+  hoist(.col = Constructor,
+        constructor = "name") %>%
+  mutate(race_name = raceName, #The name of the race (chr type)
+         round = as.integer(round), #Round of the race (int type, between 1 and 22)
+         date = as.Date(date), #Date of the race (date class)
+         driver = paste(first, last), #Name of a driver, including first and last name (chr type)
+         constructor, #Name of a driver's constructor, i.e. team (chr type)
+         position_nas = ifelse(position %in% c("R", "D", "E", "W", "F", "N"), NA, position),
+         position = as.integer(position_nas), #Position (place) driver finished in for the race (int type)
+         points = as.double(points)) %>% #Num. of points driver earned for the race (double type)
+  select(race_name, 
+         round,  
+         date, 
+         driver, 
+         constructor, 
+         position, 
+         points)
+
+#Convert to tibble for better formatting
+f1_tb <- tibble(f1_df)
+
+#Print 10 rows
+head(f1_tb, 10)
+
+
+```
+
+<br/>
+
+
+### Task 2 - Drivers' Championship
+
+#### Write up
+
+Using the tidy data from Task 1, I first created a data frame with the total points per driver at the end of the season. Then, I created another data frame with the positions of every driver at every race by pivoting the tidy data wider for drivers using the race names as the new column names and obviously the position for the values. Then I simply joined these two data frames using the common driver column, sorted the joined table by total points in descending order, and finally renamed all the columns to meet the criteria (removing "Grand Prix" for readability and to avoid redundancy). I used kable() to print out the table in a nice format, aligning all entries to the center and adding an over heading to the columns, specifying that the race names are Grand Prix.
+
+##### References
+
+https://stackoverflow.com/questions/45960269/removing-suffix-from-column-names-using-rename-all
+
+https://dplyr.tidyverse.org/reference/arrange.html
+
+https://stackoverflow.com/questions/40840986/knitrkable-is-there-a-way-to-reduce-the-font-size/44411700
+
+https://stackoverflow.com/questions/41365502/aligning-columns-with-knitr-kable-function
+
+http://haozhu233.github.io/kableExtra/awesome_table_in_html.html#Table_Styles
+
+#### Code
+
+```{r task2}
+#Create df with total points per driver
+points_df <- f1_df %>%
+  group_by(driver) %>%
+  summarise(total_points = sum(points))
+
+#Create df with positions of every driver for all races and join with points_df
+standings_df <- f1_df %>%
+  select(race_name, driver, position) %>%
+  pivot_wider(id_cols = driver, names_from = race_name,
+              values_from = position) %>%
+  left_join(points_df, by = "driver") %>%
+  arrange(desc(total_points)) %>%
+  rename(Driver = driver, "Total Points" = total_points) %>%
+  rename_with(~str_remove(., ' Grand Prix')) #rename races to avoid clutter
+
+#Print out df in nice format 
+kable(standings_df, align = 'c') %>%
+  add_header_above(c(" " = 1, "Grand Prix" = 22, " " = 1)) %>%
+  kable_styling(font_size = 9,
+                bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+<br/>
+
+### Task 3 - Cumulative Constructors
+
+#### Write up
+
+Similar to Task 2, I began with the tidy data. I selected the relevant columns, made the race_name column a factor to maintain the order of the races, and then created a column of total_points per constructor for each race. Then, I pivot the data wider for constructors using the race names as the new column names and obviously the newly created total_points for the values. Then I simply removed the "Grand Prix" suffix to avoid redundancy. I then used the apply() function with the t() (transpose) function to calculate the cumulative sum function on all rows of the data frame along all columns except the first one (constructor name). Next, I sorted by the constructors total points at the end of the season using the arrange() function on the last column "Abu Dhabi". Finally, I used kable() again to print out the table in a nice format, aligning all entries to the center and adding an over heading to the columns, specifying that the race names are Grand Prix.
+
+##### References
+
+https://stackoverflow.com/questions/53623015/dplyrsummarize-alphabetizes-but-i-need-the-original-order
+
+https://stackoverflow.com/questions/23559442/cumsum-along-row-of-data-frame-with-na-in-r
+
+https://www.guru99.com/r-apply-sapply-tapply.html
+
+https://statisticsglobe.com/use-apply-function-only-for-specific-data-frame-columns-in-r
+
+#### Code
+
+```{r task3}
+#Create df with points earned by constructors per race
+constructors_cum <- f1_df %>%
+  select(race_name, constructor, points) %>%
+  mutate(race_name = as_factor(race_name)) %>% #keep order of races
+  group_by(race_name, constructor) %>%
+  summarise(total_points = sum(points), .groups = "drop_last") %>%
+  pivot_wider(id_cols = constructor, names_from = race_name,
+              values_from = total_points) %>%
+  rename_with(~str_remove(., ' Grand Prix')) #rename races to avoid clutter
+
+#Calculate the cumulative sum function on all rows of the df along all columns
+#except the first one (constructor name)
+constructors_cum[,-1] <- t(apply(constructors_cum[,-1], 1, cumsum))
+
+#Sort by the constructors total points at the end of the season
+constructors_cum <- constructors_cum %>%
+  arrange(desc(`Abu Dhabi`)) %>%
+  rename(Constructor = constructor)
+
+#Print df with nice formatting
+kable(constructors_cum, align = 'c') %>%
+  add_header_above(c(" " = 1, "Grand Prix" = 22)) %>%
+  kable_styling(font_size = 9,
+                bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+<br/>
+
+### Task 4 - Visualization
+
+#### Write up
+
+To achieve a visualization of the performance of both drivers and teams over the course of the 2021 F1 season in terms of the points earned toward the drivers' and constructors' Championship standings, I began by first creating a data frame with the cumulative points earned by each driver as a long table so it is easier to plot. I ensured to keep the race order by turning the race names into factors. Then, since I wanted to create a rank column to show the current rank of a driver at each race, I sorted by cumulative points per race, grouped by driver, and then used the rank() function on the negative cumulative points column (which simply means we want to rank in descending order where rank 1 is the best). Within the rank function, I also specified that the way we break ties is that every tied driver is assigned the lowest rank (e.g. drivers ranked in the 3rd and 4th position would both receive a rank of 3).
+
+Next, I found that having a plot with the full names of races (even without the "Grand Prix" suffix) would be too cluttered. Thus, I created a named character vector of abbreviations to improve readability of plots, and added this as a new column in the data frame which match the full race name.
+
+Then, I wanted to show the main or most dramatic events during the 2021 F1 season in a way that shows when they happened. Thus, I searched the internet and found a [list](https://racingnews365.com/the-10-most-dramatic-moments-of-the-2021-f1-season) which summarized these events and then created a data frame called top_events to hold this information. The key moment summaries where matched to their appropriate races using the case_when() function (where all races with no match are assigned an empty string), and also the maximum cumulative points at that specific race to ensure that when printing the plot the labels are all on top of the data and not covering other information.
+
+When creating the plots, I used ggplot for plotting both the cumulative points per driver and cumulative points per constructor, with distinct colors per group (drivers or constructors). I used the geom_line() and geom_point() functions to plot both the individual points and a line connecting consecutive points in the order that the races happened. I specified coord_cartesian(clip = "off") to allow the event labels to be printed outside the axes. Then, for the drivers plot, I included the gghighlight function from the gghighlight package to emphasize only the drivers who never dropped below 10th place and specified use_direct_label = FALSE to avoid extra clutter within the plot (since the name of the drivers were already being announced in the legend). Finally, for the driver plot I also used geom_label_repel() with different stylistic details to ensure the key events were printed nicely. I also used the labs() function to edit the labels of the axes and titles for all plots and the theme() function to specify the location of the legend.
+
+At last, I wanted to highlight a very important aspect of the 2021 F1 season; the fight for the podium. I wanted to show the progression of the top three drivers which made the podium (Verstappen, Hamilton, and Bottas) in a way that seemed to show the transitions slowly and highlight the final positions. Thus, I landed on using ggplot again to generate an underlying graphic but animating it using the transition_reveal() function along with the animate() function. I first filtered the data for only values of the three podium winners, specified that I wanted each driver to have its own color using the color=driver option in the aesthetic mapping of the plot, and then called geom_line() and geom_point() again. Once the ggplot object was finalized with the appropriate labels and titles, I used the transition_reveal() function to gradually show cumulative points in race order. However, it is important to note that the transition_reveal() function requires a numerical vector, so I simply created another named vector called nums with numbers from 1 to 22 in the order that the race occurred during the season, and added it as a column to the data frame.
+
+Since the constructor and driver plots both have the same x axis and overall format, I output both plots stacked vertically using grid.arrange() with the number of columns equal to one. To output the animation, I used the animate() function with end_pause = 15 to repeat the last frame 15 times (so viewers can see the final positions more clearly), and a slower frame rate than the default of 10 by specifying fps = 5 (to emphasize how close some points of the season were).
+
+##### References
+
+https://stackoverflow.com/questions/16850207/calculate-cumulative-sum-cumsum-by-group
+
+https://stackoverflow.com/questions/7970179/transposing-a-dataframe-maintaining-the-first-column-as-heading
+
+https://stackoverflow.com/questions/15768099/ggplot2-and-cumsum
+
+https://stackoverflow.com/questions/29511215/convert-row-names-into-first-column
+
+https://stackoverflow.com/questions/22772279/converting-multiple-columns-from-character-to-numeric-format-in-r
+
+https://dplyr.tidyverse.org/reference/across.html
+
+https://tidyr.tidyverse.org/reference/pivot_longer.html
+
+https://stackoverflow.com/questions/47445040/using-gsub-on-a-dataframe
+
+https://stackoverflow.com/questions/50493914/r-how-to-remove-a-particular-string-from-column-values
+
+https://gganimate.com/reference/transition_states.html
+
+https://stackoverflow.com/questions/53422127/time-series-in-ggplot-using-geom-line
+
+https://stackoverflow.com/questions/24849699/map-array-of-strings-to-an-array-of-integers
+
+https://stackoverflow.com/questions/53092216/any-way-to-pause-at-specific-frames-time-points-with-transition-reveal-in-gganim/53093389
+
+https://gganimate.com/reference/animate.html
+
+https://cran.r-project.org/web/packages/gghighlight/vignettes/gghighlight.html
+
+https://www.rdocumentation.org/packages/gganimate/versions/1.0.7/topics/animate
+
+https://stackoverflow.com/questions/41362895/r-ggplot2-change-the-spacing-between-the-legend-and-the-panel/41362999
+
+https://www.statology.org/dplyr-rank-by-group/
+
+https://www.rdocumentation.org/packages/dplyr/versions/0.7.8/topics/case_when
+
+https://stackoverflow.com/questions/25314336/extract-the-maximum-value-within-each-group-in-a-dataframe
+
+https://ggrepel.slowkow.com/articles/examples.html
+
+https://stackoverflow.com/questions/1249548/side-by-side-plots-with-ggplot2
+
+https://racingnews365.com/the-10-most-dramatic-moments-of-the-2021-f1-season
+
+
+#### Code
+
+```{r task4, fig.width=10, fig.height=14}
+#Create df with cumulative points earned by each driver (long table)
+drivers_cum <- f1_df %>%
+  select(race_name, driver, points) %>%
+  mutate(race_name = as_factor(race_name)) %>% #keep race order
+  group_by(driver) %>%
+  mutate(cum_points = cumsum(points)) %>%
+  select(race_name, driver, cum_points) %>%
+  arrange(race_name, cum_points) %>% #sort by cumulative points per race
+  group_by(race_name) %>%
+  mutate(rank = rank(-cum_points, ties.method='min')) #create rank column to show current rank at each race
+#every tied driver is assigned the lowest rank (drivers ranked in the 3rd and 4th position would both receive a rank of 3)
+
+
+#Create abbreviations for race names to improve readability of plots
+strings=sort(unique(drivers_cum$race_name))
+abbr=c(
+  "BHR",
+  "EMI",
+  "POR",
+  "ESP",
+  "MON",
+  "AZE",
+  "FRA",
+  "STY",
+  "AUT",
+  "GBR",
+  "HUN",
+  "BEL",
+  "NED",
+  "ITA",
+  "RUS",
+  "TUR",
+  "USA",
+  "MXC",
+  "SAP",
+  "QAT",
+  "SAU",
+  "ABU"
+) #sourced from https://en.wikipedia.org/wiki/2021_Formula_One_World_Championship#World_Drivers'_Championship_standings
+names(abbr)=strings #set names of abbreviations to the actual race names
+
+#Create new column in df with race name abbreviations which match the full race name
+drivers_cum$race_name_abbr=as_factor(abbr[drivers_cum$race_name])
+
+#Create df with top points per race to output events
+top_events <- drivers_cum %>% 
+  group_by(race_name_abbr) %>% 
+  summarise(max = max(cum_points)) %>%
+  mutate(event = 
+           case_when(
+             race_name_abbr == "EMI" ~ "Hamilton slides off into gravel",
+             race_name_abbr == "AZE" ~ "Verstappen crashes out of the lead, Checo wins",
+             race_name_abbr == "GBR" ~ "Verstappen and Hamilton collide, \nVerstappen retires",
+             race_name_abbr == "HUN" ~ "Both Red Bulls crash, Ocon wins",
+             race_name_abbr == "BEL" ~ "Rain cuts race short and half points were awarded",
+             race_name_abbr == "ITA" ~ "Verstappen and Hamilton collide AGAIN, retire",
+             race_name_abbr == "SAP" ~ "Hamilton penalized, Verstappen fined",
+             race_name_abbr == "SAU" ~ "Two red flags",
+             race_name_abbr == "ABU" ~ "Dramatic finish \nwith safety car",
+             TRUE ~ ""
+           )
+  ) #create event columns with key moments of the season
+
+#Plot drivers cumulative points each with a different color
+drivers_cum_plot <- drivers_cum %>%
+  ggplot(aes(x = race_name_abbr, y = cum_points)) + 
+  geom_line(aes(color = driver, group = driver)) + 
+  geom_point(aes(color = driver, group = driver)) +
+  coord_cartesian(clip = "off") + #allow objects outside axes
+  gghighlight(max(rank) <= 10, use_direct_label = FALSE) + #highlight only the drivers who never dropped below 10th place
+  geom_label_repel(data = top_events, 
+                   mapping = aes(x = race_name_abbr, y = max, label = event), 
+                   size = 2,
+                   ylim = c(0, Inf),
+                   xlim = c(0, Inf),
+                   direction = "y",
+                   nudge_y = 45) +
+  labs(
+    title = "2021 Season Driver Progression",
+    subtitle = paste("F1 Season Cumulative Points"),
+    x = "Grand Prix",
+    y = "Cumulative Points Earned",
+    color = "Driver") +
+  theme(legend.position = "bottom", legend.direction = "horizontal")
+
+#Create numeric vector to use as column in transition_reveal()
+nums=1:length(strings)
+names(nums)=strings #set names of numbers to race names
+
+#Create a new column in drivers_cum df that represents the race number (1 - 22)
+drivers_cum$race_name_num=nums[drivers_cum$race_name]
+
+#Create a season-specific vector of podium winners
+podium_winners <- c("Max Verstappen", "Lewis Hamilton", "Valtteri Bottas")
+
+#Plot the cumulative points earned by the top 3 drivers of the season and animate it
+podium_animation <- drivers_cum %>%
+  filter(driver %in% podium_winners) %>% #only select drivers in podium 
+  ggplot(aes(x = race_name_abbr, y = cum_points, color = driver, group = driver)) + 
+  geom_line() + 
+  geom_point() +
+  labs(
+    title = "The Fight for the Podium",
+    subtitle = paste("F1 Season Cumulative Points for Drivers in Final Podium"),
+    x = "Grand Prix",
+    y = "Cumulative Points Earned",
+    color = "") + #remove redundant label
+  theme(legend.position="top",
+        legend.justification="right",
+        legend.margin = margin(0,0,0,0),
+        axis.title.y = element_text(margin = margin(t = 0, r = 10, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0))) +
+  transition_reveal(race_name_num) #gradually show cumulative points in race order
+
+
+#Create constructor df in same formt as drivers_cum df
+constructor_df <- f1_df %>%
+  select(race_name, constructor, points) %>%
+  mutate(race_name = as_factor(race_name)) %>% #keep race order
+  group_by(constructor) %>%
+  mutate(cum_points = cumsum(points)) %>%
+  select(race_name, constructor, cum_points) %>%
+  arrange(race_name, cum_points) %>% #sort by cumulative points per race
+  group_by(race_name) %>%
+  mutate(rank = rank(-cum_points, ties.method='min'))
+
+#Create new column in df with race name abbreviations which match the full race name
+constructor_df$race_name_abbr=as_factor(abbr[constructor_df$race_name])
+
+#Plot constructors cumulative points each with a different color
+constructors_cum_plot <- constructor_df %>%
+  ggplot(aes(x = race_name_abbr, y = cum_points)) + 
+  geom_line(aes(color = constructor, group = constructor)) + 
+  geom_point(aes(color = constructor, group = constructor)) +
+  labs(
+    title = "2021 Season Constructor Progression",
+    subtitle = paste("F1 Season Cumulative Points"),
+    caption = "*A vertical increase at a race indicates both drivers scored points",
+    x = "Grand Prix",
+    y = "Cumulative Points Earned",
+    color = "Constructor") +
+  theme(legend.position = "bottom", legend.direction = "horizontal")
+
+#Output both plots stacked
+grid.arrange(drivers_cum_plot, constructors_cum_plot, ncol = 1)
+
+#Output animation
+animate(podium_animation,
+        end_pause = 15, #repeat the last frame 15 times
+        fps = 5, #5 frames per second
+        width = 900, height = 500) #dimensions
+
+```
+
+<br/>
+
